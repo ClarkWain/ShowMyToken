@@ -94,7 +94,7 @@ impl Default for CollectorStatus {
             source_mode: "vsCodeOtlpHttp".into(),
             status: "starting".into(),
             connected: false,
-            message: "Waiting for VS Code agent spans".into(),
+            message: "Waiting for the first VS Code span or a preview pulse".into(),
             error: None,
             last_event_unix_ms: None,
         }
@@ -274,6 +274,11 @@ fn connect_editor_target(
 }
 
 #[tauri::command]
+fn preview_demo(shared: tauri::State<'_, SharedState>) -> Result<DashboardSnapshot, String> {
+    Ok(inject_demo_snapshot(&shared, None))
+}
+
+#[tauri::command]
 fn reset_counters(shared: tauri::State<'_, SharedState>) -> Result<DashboardSnapshot, String> {
     {
         let mut runtime = shared
@@ -287,7 +292,7 @@ fn reset_counters(shared: tauri::State<'_, SharedState>) -> Result<DashboardSnap
         runtime.collector.connected = false;
         runtime.collector.last_event_unix_ms = None;
         runtime.collector.status = "listening".into();
-        runtime.collector.message = "Collector reset. Waiting for the next agent span".into();
+        runtime.collector.message = "Collector reset. Waiting for the next agent span or preview pulse".into();
     }
 
     Ok(shared.snapshot())
@@ -449,6 +454,59 @@ fn persist_settings(path: &Path, settings: &AppSettings) -> Result<(), String> {
     fs::write(path, format!("{serialized}\n")).map_err(|error| error.to_string())
 }
 
+fn inject_demo_snapshot(shared: &SharedState, app: Option<&AppHandle>) -> DashboardSnapshot {
+    let now = unix_ms();
+
+    if let Ok(mut runtime) = shared.0.runtime.lock() {
+        runtime.collector.connected = true;
+        runtime.collector.status = "preview".into();
+        runtime.collector.message = "Preview pulse injected locally. Connect VS Code when you are ready for live Copilot usage.".into();
+        runtime.collector.error = None;
+        runtime.collector.last_event_unix_ms = Some(now);
+
+        for record in demo_usage_records(now) {
+            let _ = apply_usage_record(&mut runtime, record, now);
+        }
+    }
+
+    let snapshot = shared.snapshot();
+
+    if let Some(app) = app {
+        let _ = app.emit(SNAPSHOT_EVENT, snapshot.clone());
+    }
+
+    snapshot
+}
+
+fn demo_usage_records(now: u64) -> Vec<UsageRecord> {
+    vec![
+        UsageRecord {
+            span_id: format!("demo-copilot-{now}"),
+            agent_name: "copilot".into(),
+            provider_name: "github".into(),
+            model: Some("gpt-4.1".into()),
+            input_tokens: 1482,
+            output_tokens: 224,
+        },
+        UsageRecord {
+            span_id: format!("demo-claude-{now}"),
+            agent_name: "claude".into(),
+            provider_name: "anthropic".into(),
+            model: Some("claude-4-sonnet".into()),
+            input_tokens: 832,
+            output_tokens: 128,
+        },
+        UsageRecord {
+            span_id: format!("demo-copilotcli-{now}"),
+            agent_name: "copilotcli".into(),
+            provider_name: "github".into(),
+            model: Some("gpt-4.1-mini".into()),
+            input_tokens: 320,
+            output_tokens: 64,
+        },
+    ]
+}
+
 fn update_collector_status(shared: &SharedState, app: &AppHandle, mutate: impl FnOnce(&mut RuntimeState)) {
     if let Ok(mut runtime) = shared.0.runtime.lock() {
         mutate(&mut runtime);
@@ -495,6 +553,7 @@ fn start_collector(app: AppHandle, shared: SharedState) {
 
                 let router = Router::new()
                     .route("/healthz", get(healthz))
+                    .route("/debug/demo", post(demo_pulse))
                     .route("/v1/traces", post(ingest_traces))
                     .with_state(collector.clone());
 
@@ -521,6 +580,13 @@ fn start_collector(app: AppHandle, shared: SharedState) {
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+async fn demo_pulse(
+    AxumState(context): AxumState<CollectorContext>,
+) -> StatusCode {
+    inject_demo_snapshot(&context.shared, Some(&context.app));
+    StatusCode::OK
 }
 
 async fn ingest_traces(
@@ -799,6 +865,7 @@ pub fn run() {
             save_settings,
             save_window_position,
             connect_editor_target,
+            preview_demo,
             reset_counters,
             quit_app
         ])

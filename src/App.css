@@ -27,7 +27,7 @@ input {
 
 .shell {
   min-height: 100vh;
-  padding: 18px;
+  padding: 10px;
   display: flex;
   justify-content: center;
   align-items: center;
@@ -37,11 +37,18 @@ input {
   transform: scale(var(--panel-scale, 1));
 }
 
+.shell--browser-preview {
+  background:
+    radial-gradient(circle at 18% 18%, rgba(255, 138, 61, 0.18), transparent 30%),
+    radial-gradient(circle at 82% 22%, rgba(91, 201, 255, 0.14), transparent 34%),
+    linear-gradient(135deg, #0b1018, #101722 58%, #0a0f18);
+}
+
 .glass-panel {
   position: relative;
   width: min(100%, 760px);
-  padding: 18px;
-  border-radius: 28px;
+  padding: 14px;
+  border-radius: 24px;
   border: 1px solid rgba(255, 255, 255, 0.1);
   background:
     radial-gradient(circle at top left, rgba(255, 138, 61, 0.35), transparent 42%),
@@ -51,7 +58,13 @@ input {
     0 30px 80px rgba(6, 9, 14, 0.48),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(18px) saturate(135%);
+  max-height: calc(100vh - 20px);
   overflow: hidden;
+  scrollbar-width: thin;
+}
+
+.shell--expanded .glass-panel {
+  overflow: auto;
 }
 
 .glass-panel::before {
@@ -66,11 +79,11 @@ input {
 
 .topbar,
 .hero,
-.stats-grid,
-.provider-grid,
+.dashboard-grid,
 .settings-drawer,
 .footer-row,
-.toast {
+.toast,
+.zero-state {
   position: relative;
   z-index: 1;
 }
@@ -78,15 +91,15 @@ input {
 .topbar {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
+  gap: 12px;
+  align-items: center;
 }
 
 .brand-block {
   display: flex;
   gap: 12px;
   align-items: flex-start;
-  max-width: 70%;
+  min-width: 0;
 }
 
 .brand-pill {
@@ -112,15 +125,22 @@ input {
 .brand-block h1,
 .settings-group h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: 16px;
   line-height: 1.1;
 }
 
 .topbar__actions,
-.settings-actions {
+.settings-actions,
+.hero__status-row,
+.zero-state__actions {
   display: flex;
   gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
+}
+
+.topbar__actions {
+  justify-content: flex-end;
 }
 
 .ghost-button,
@@ -132,6 +152,12 @@ input {
   color: inherit;
   cursor: pointer;
   transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.ghost-button--small {
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 13px;
 }
 
 .ghost-button:hover,
@@ -160,10 +186,11 @@ input {
 }
 
 .hero {
-  margin-top: 18px;
+  margin-top: 12px;
   display: grid;
   grid-template-columns: 1.2fr 0.8fr;
-  gap: 16px;
+  gap: 12px;
+  align-items: stretch;
 }
 
 .hero__value-row {
@@ -173,7 +200,7 @@ input {
 }
 
 .hero__value-row strong {
-  font-size: clamp(42px, 9vw, 64px);
+  font-size: clamp(38px, 8vw, 56px);
   line-height: 0.95;
   letter-spacing: -0.06em;
 }
@@ -185,12 +212,13 @@ input {
   color: #8be0ff;
   font-size: 12px;
   font-weight: 700;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .status-line {
-  margin: 8px 0 0;
-  font-size: 14px;
+  margin: 6px 0 0;
+  font-size: 13px;
   color: rgba(248, 251, 255, 0.82);
 }
 
@@ -200,18 +228,49 @@ input {
   color: rgba(248, 251, 255, 0.6);
 }
 
+.signal-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.signal-pill--endpoint {
+  font-family: "JetBrains Mono", monospace;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+
+.signal-pill--live {
+  background: rgba(122, 245, 165, 0.16);
+  color: #8af6b0;
+}
+
+.signal-pill--idle,
+.signal-pill--muted {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(248, 251, 255, 0.72);
+}
+
 .hero__spark {
-  padding: 16px;
+  padding: 12px;
   border-radius: 24px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .hero__spark-caption,
-.provider-card__meta,
-.editor-card,
 .toggle-row,
-.footer-row {
+.footer-row,
+.editor-card,
+.provider-pill__row,
+.provider-pill__meta {
   display: flex;
   justify-content: space-between;
   gap: 12px;
@@ -219,7 +278,7 @@ input {
 }
 
 .hero__spark-caption,
-.provider-card__meta,
+.provider-pill__meta,
 .editor-card span {
   font-size: 12px;
   color: rgba(248, 251, 255, 0.68);
@@ -227,7 +286,7 @@ input {
 
 .sparkline {
   width: 100%;
-  height: 86px;
+  height: 60px;
 }
 
 .sparkline__glow {
@@ -246,85 +305,103 @@ input {
   stroke-linejoin: round;
 }
 
-.stats-grid,
-.provider-grid {
-  margin-top: 16px;
+.dashboard-grid {
+  margin-top: 12px;
   display: grid;
-  gap: 12px;
+  gap: 10px;
 }
 
-.stats-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+.dashboard-grid {
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
 }
 
-.provider-grid {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.shell--compact .provider-grid {
-  grid-template-columns: 1fr;
-}
-
-.metric-card,
-.provider-card,
-.editor-card,
-.supported-callout {
-  padding: 14px;
+.metric-board,
+.side-board {
+  padding: 12px;
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.metric-card span,
-.provider-card span,
+.metric-board__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.metric-pill,
+.provider-pill,
+.zero-state,
+.editor-card,
+.supported-callout,
+.settings-group {
+  padding: 12px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.metric-pill span,
+.provider-pill span,
 .supported-callout p {
-  color: rgba(248, 251, 255, 0.65);
+  color: rgba(248, 251, 255, 0.66);
 }
 
-.metric-card strong,
-.provider-card__value {
+.metric-pill strong,
+.provider-pill strong {
   display: block;
-  margin-top: 6px;
-  font-size: 24px;
-  font-weight: 700;
+  margin-top: 4px;
+  font-size: 17px;
 }
 
-.metric-card small {
-  display: block;
-  margin-top: 6px;
-  font-size: 12px;
-  color: rgba(248, 251, 255, 0.55);
-  font-family: "JetBrains Mono", monospace;
-}
-
-.provider-card__header {
+.side-board {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
 }
 
-.provider-card__header p {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
+.side-board__providers,
+.side-board__actions {
+  display: grid;
+  gap: 10px;
 }
 
-.provider-card__header span,
-.provider-card__meta {
+.side-board__actions {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.provider-pill__meta {
+  margin-top: 6px;
   font-family: "JetBrains Mono", monospace;
 }
 
 .provider-card__dot {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.24);
   box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.16);
 }
 
-.provider-card__dot--live {
+.provider-card__dot--live,
+.provider-card__dot--preview {
   background: #7af5a5;
-  box-shadow: 0 0 0 8px rgba(122, 245, 165, 0.12);
+  box-shadow: 0 0 0 7px rgba(122, 245, 165, 0.12);
+}
+
+.zero-state strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 20px;
+}
+
+.zero-state p {
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+.zero-state__actions {
+  margin-top: 12px;
 }
 
 .settings-drawer {
@@ -339,16 +416,9 @@ input {
 }
 
 .settings-drawer--open {
-  margin-top: 16px;
-  max-height: 960px;
+  margin-top: 12px;
+  max-height: 1200px;
   opacity: 1;
-}
-
-.settings-group {
-  padding: 16px;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
 .settings-group label {
@@ -387,7 +457,7 @@ input {
 }
 
 .supported-callout {
-  margin-top: 14px;
+  margin-top: 12px;
 }
 
 .supported-callout p {
@@ -395,15 +465,10 @@ input {
   line-height: 1.55;
 }
 
-.footer-row {
-  margin-top: 16px;
-  font-size: 12px;
-}
-
 .toast {
   position: absolute;
-  right: 18px;
-  bottom: 18px;
+  right: 14px;
+  bottom: 14px;
   padding: 12px 14px;
   border-radius: 16px;
   background: rgba(11, 16, 24, 0.92);
@@ -424,31 +489,29 @@ input {
 
 @media (max-width: 720px) {
   .shell {
-    padding: 10px;
+    padding: 8px;
   }
 
   .glass-panel {
-    padding: 14px;
-    border-radius: 24px;
+    padding: 12px;
+    border-radius: 20px;
   }
 
   .topbar,
   .hero,
-  .settings-drawer,
-  .stats-grid,
-  .provider-grid {
+  .dashboard-grid,
+  .settings-drawer {
     grid-template-columns: 1fr;
   }
 
   .topbar,
-  .brand-block,
-  .topbar__actions {
+  .brand-block {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .brand-block {
-    max-width: 100%;
+  .topbar__actions {
+    justify-content: flex-start;
   }
 
   .hero__value-row {

@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import {
   startTransition,
   useEffect,
@@ -12,7 +12,8 @@ import {
 import "./App.css";
 
 const SNAPSHOT_EVENT = "show-my-token://snapshot";
-const windowHandle = getCurrentWindow();
+const hasTauriRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+const windowHandle = hasTauriRuntime ? getCurrentWindow() : null;
 const numberFormatter = new Intl.NumberFormat("en-US");
 
 type AppSettings = {
@@ -142,6 +143,35 @@ function formatRelativeTime(unixMs: number | null) {
   return `Updated ${minutes}m ago`;
 }
 
+function summarizeCollectorMessage(message: string | null | undefined) {
+  if (!message) {
+    return "Booting collector...";
+  }
+
+  if (message.includes("Preview pulse injected locally")) {
+    return "Preview traffic is visible.";
+  }
+
+  if (message.includes("Ready to capture") || message.includes("Waiting")) {
+    return "Waiting for live agent traffic.";
+  }
+
+  return message;
+}
+
+function formatCollectorEndpoint(endpoint: string | null | undefined) {
+  if (!endpoint) {
+    return "127.0.0.1:14318";
+  }
+
+  try {
+    const url = new URL(endpoint);
+    return url.host;
+  } catch {
+    return endpoint.replace(/^https?:\/\//, "");
+  }
+}
+
 function buildSparklinePath(points: number[]) {
   const series = points.length > 0 ? points.slice(-16) : [0, 0, 0];
   const max = Math.max(...series, 1);
@@ -164,9 +194,102 @@ function Sparkline({ points }: { points: number[] }) {
   );
 }
 
+function createPreviewSnapshot(): DashboardSnapshot {
+  return {
+    settings: {
+      appearance: {
+        opacity: 0.76,
+        fontScale: 1,
+        textColor: "#F8FBFF",
+        accentColor: "#FF8A3D",
+        compactMode: false,
+      },
+      window: {
+        alwaysOnTop: true,
+        position: null,
+      },
+    },
+    collector: {
+      endpoint: "http://127.0.0.1:14318",
+      sourceMode: "preview",
+      status: "preview",
+      connected: true,
+      message: "Preview traffic is visible.",
+      error: null,
+      lastEventUnixMs: Date.now(),
+    },
+    providers: [
+      {
+        id: "copilot",
+        label: "GitHub Copilot",
+        agentName: "copilot",
+        providerName: "github",
+        status: "preview",
+        inputTokens: 2200,
+        outputTokens: 800,
+        totalTokens: 3000,
+        requests: 12,
+        recentDeltas: [120, 260, 180, 340, 480, 360, 520, 740],
+        lastModel: "gpt-4.1",
+        lastUpdateUnixMs: Date.now(),
+        source: "preview",
+      },
+      {
+        id: "claude",
+        label: "Claude Code",
+        agentName: "claude",
+        providerName: "anthropic",
+        status: "idle",
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        requests: 0,
+        recentDeltas: [],
+        lastModel: null,
+        lastUpdateUnixMs: null,
+        source: "preview",
+      },
+      {
+        id: "copilotcli",
+        label: "Copilot CLI",
+        agentName: "copilotcli",
+        providerName: "github",
+        status: "idle",
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        requests: 0,
+        recentDeltas: [],
+        lastModel: null,
+        lastUpdateUnixMs: null,
+        source: "preview",
+      },
+    ],
+    editorTargets: [
+      {
+        id: "vscode",
+        label: "VS Code",
+        settingsPath: "preview",
+        exists: true,
+        connected: false,
+      },
+      {
+        id: "vscode-insiders",
+        label: "VS Code Insiders",
+        settingsPath: "preview",
+        exists: true,
+        connected: false,
+      },
+    ],
+    appVersion: "0.1.0",
+  };
+}
+
+const browserPreviewSnapshot = hasTauriRuntime ? null : createPreviewSnapshot();
+
 function App() {
-  const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(null);
-  const [draft, setDraft] = useState<AppSettings | null>(null);
+  const [snapshot, setSnapshot] = useState<DashboardSnapshot | null>(browserPreviewSnapshot);
+  const [draft, setDraft] = useState<AppSettings | null>(browserPreviewSnapshot?.settings ?? null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -175,7 +298,31 @@ function App() {
   const moveTimer = useRef<number | null>(null);
 
   const applyWindowPreferences = useEffectEvent(async (settings: AppSettings) => {
+    if (!windowHandle) {
+      return;
+    }
+
     await windowHandle.setAlwaysOnTop(settings.window.alwaysOnTop);
+
+    const monitor = await currentMonitor();
+
+    if (monitor) {
+      const size = await windowHandle.innerSize();
+      const padding = 24;
+      const minX = monitor.position.x + padding;
+      const minY = monitor.position.y + padding;
+      const maxX = Math.max(minX, monitor.position.x + monitor.size.width - size.width - padding);
+      const maxY = Math.max(minY, monitor.position.y + monitor.size.height - size.height - padding);
+      const target = settings.window.position ?? { x: maxX, y: minY };
+      const clampedX = Math.min(Math.max(target.x, minX), maxX);
+      const clampedY = Math.min(Math.max(target.y, minY), maxY);
+
+      await windowHandle.setPosition(
+        new PhysicalPosition(Math.round(clampedX), Math.round(clampedY)),
+      );
+
+      return;
+    }
 
     if (settings.window.position) {
       await windowHandle.setPosition(
@@ -209,11 +356,20 @@ function App() {
   );
 
   const reloadSnapshot = useEffectEvent(async (reason: "boot" | "reload") => {
+    if (!hasTauriRuntime) {
+      hydrateSnapshot(createPreviewSnapshot(), reason);
+      return;
+    }
+
     const nextSnapshot = await invoke<DashboardSnapshot>("bootstrap");
     hydrateSnapshot(nextSnapshot, reason);
   });
 
   useEffect(() => {
+    if (!hasTauriRuntime || !windowHandle) {
+      return;
+    }
+
     void reloadSnapshot("boot");
 
     let unlistenSnapshot: (() => void) | undefined;
@@ -263,6 +419,13 @@ function App() {
       return;
     }
 
+    if (!hasTauriRuntime) {
+      setSnapshot((current) => (current ? { ...current, settings: draft } : current));
+      setIsDirty(false);
+      setNotice("Preview mode only.");
+      return;
+    }
+
     setBusyAction("save-settings");
 
     try {
@@ -277,6 +440,11 @@ function App() {
   }
 
   async function connectEditor(targetId: string, label: string) {
+    if (!hasTauriRuntime) {
+      setNotice(`${label} preview is available in the desktop app.`);
+      return;
+    }
+
     setBusyAction(targetId);
 
     try {
@@ -288,7 +456,45 @@ function App() {
     }
   }
 
+  async function previewTokens() {
+    if (!hasTauriRuntime) {
+      const nextSnapshot = createPreviewSnapshot();
+      hydrateSnapshot(nextSnapshot, "reload");
+      setNotice("Preview tokens injected.");
+      return;
+    }
+
+    setBusyAction("preview-demo");
+
+    try {
+      const nextSnapshot = await invoke<DashboardSnapshot>("preview_demo");
+      hydrateSnapshot(nextSnapshot, "reload");
+      setNotice("Preview tokens injected.");
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function resetCounters() {
+    if (!hasTauriRuntime) {
+      const nextSnapshot = createPreviewSnapshot();
+      nextSnapshot.providers = nextSnapshot.providers.map((provider) => ({
+        ...provider,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        requests: 0,
+        recentDeltas: [],
+        lastModel: null,
+        lastUpdateUnixMs: null,
+      }));
+      nextSnapshot.collector.connected = false;
+      nextSnapshot.collector.message = "Waiting for live agent traffic.";
+      hydrateSnapshot(nextSnapshot, "reload");
+      setNotice("Token counters reset.");
+      return;
+    }
+
     setBusyAction("reset");
 
     try {
@@ -301,11 +507,21 @@ function App() {
   }
 
   async function hideOverlay() {
+    if (!windowHandle) {
+      setNotice("Hide is available in the desktop app.");
+      return;
+    }
+
     await windowHandle.minimize();
     setNotice("Overlay minimized. Use the taskbar icon to show it again.");
   }
 
   async function quitOverlay() {
+    if (!hasTauriRuntime) {
+      setNotice("Quit is available in the desktop app.");
+      return;
+    }
+
     await invoke("quit_app");
   }
 
@@ -323,7 +539,13 @@ function App() {
   const totalOutput = visibleProviders.reduce((sum, provider) => sum + provider.outputTokens, 0);
   const totalTokens = totalInput + totalOutput;
   const totalRequests = visibleProviders.reduce((sum, provider) => sum + provider.requests, 0);
+  const activeProviders = visibleProviders.filter((provider) => provider.totalTokens > 0);
+  const displayedProviders = (activeProviders.length > 0 ? activeProviders : visibleProviders).slice(0, 2);
   const topProvider = visibleProviders[0];
+  const primaryConnectTarget =
+    snapshot?.editorTargets.find((target) => target.exists && !target.connected) ?? null;
+  const collectorMessage = summarizeCollectorMessage(snapshot?.collector.message);
+  const collectorEndpoint = formatCollectorEndpoint(snapshot?.collector.endpoint);
   const animatedTotal = useAnimatedNumber(totalTokens);
   const animatedInput = useAnimatedNumber(totalInput);
   const animatedOutput = useAnimatedNumber(totalOutput);
@@ -337,7 +559,7 @@ function App() {
 
   return (
     <main
-      className={`shell ${draft?.appearance.compactMode ? "shell--compact" : ""} ${
+      className={`shell ${!hasTauriRuntime ? "shell--browser-preview" : ""} ${draft?.appearance.compactMode ? "shell--compact" : ""} ${
         settingsOpen ? "shell--expanded" : ""
       }`}
       style={panelStyle}
@@ -348,87 +570,138 @@ function App() {
             <span className="brand-pill">SHOWMYTOKEN</span>
             <div>
               <p className="eyebrow">Live Agent Overlay</p>
-              <h1>Desktop token telemetry, no dashboard tab required.</h1>
+              <h1>{totalTokens > 0 ? "Live token burn is on screen." : "Ready for the first token pulse."}</h1>
             </div>
           </div>
 
           <div className="topbar__actions">
-            <button className="ghost-button" type="button" onClick={() => setSettingsOpen((open) => !open)}>
+            <button
+              className="ghost-button ghost-button--small"
+              type="button"
+              onClick={() => setSettingsOpen((open) => !open)}
+            >
               {settingsOpen ? "Hide settings" : "Settings"}
-            </button>
-            <button className="ghost-button" type="button" onClick={hideOverlay}>
-              Hide
-            </button>
-            <button className="ghost-button ghost-button--danger" type="button" onClick={quitOverlay}>
-              Quit
             </button>
           </div>
         </header>
 
-        <section className="hero">
+        <section className="hero hero--compact">
           <div className="hero__copy">
             <p className="eyebrow">Total agent tokens</p>
             <div className="hero__value-row">
               <strong>{formatTokenCount(animatedTotal)}</strong>
-              <span>{snapshot?.collector.connected ? "LIVE" : "IDLE"}</span>
+              <span>{topProvider?.label ?? "GitHub Copilot"}</span>
             </div>
-            <p className="status-line">{snapshot?.collector.message ?? "Booting collector..."}</p>
-            <p className="status-line status-line--subtle">
-              {formatRelativeTime(snapshot?.collector.lastEventUnixMs ?? null)}
-            </p>
+            <p className="status-line">{collectorMessage}</p>
+            <div className="hero__status-row">
+              <span className={`signal-pill signal-pill--${snapshot?.collector.connected ? "live" : "idle"}`}>
+                {snapshot?.collector.connected ? "Collector live" : "Waiting"}
+              </span>
+              <span className="signal-pill signal-pill--muted">
+                {formatRelativeTime(snapshot?.collector.lastEventUnixMs ?? null)}
+              </span>
+              <span className="signal-pill signal-pill--muted signal-pill--endpoint">
+                {collectorEndpoint}
+              </span>
+            </div>
           </div>
 
           <div className="hero__spark">
             <Sparkline points={topProvider?.recentDeltas ?? []} />
             <div className="hero__spark-caption">
-              <span>{topProvider?.label ?? "GitHub Copilot"}</span>
               <span>{topProvider?.lastModel ?? "waiting for first model"}</span>
+              <span>{snapshot?.collector.status ?? "starting"}</span>
             </div>
           </div>
         </section>
 
-        <section className="stats-grid">
-          <article className="metric-card">
-            <span>Input</span>
-            <strong>{formatTokenCount(animatedInput)}</strong>
+        <section className="dashboard-grid">
+          <article className="metric-board">
+            <div className="metric-board__grid">
+              <div className="metric-pill">
+                <span>Input</span>
+                <strong>{formatTokenCount(animatedInput)}</strong>
+              </div>
+              <div className="metric-pill">
+                <span>Output</span>
+                <strong>{formatTokenCount(animatedOutput)}</strong>
+              </div>
+              <div className="metric-pill">
+                <span>Requests</span>
+                <strong>{formatTokenCount(animatedRequests)}</strong>
+              </div>
+              <div className="metric-pill">
+                <span>Agents</span>
+                <strong>{activeProviders.length || 1}</strong>
+              </div>
+            </div>
           </article>
-          <article className="metric-card">
-            <span>Output</span>
-            <strong>{formatTokenCount(animatedOutput)}</strong>
-          </article>
-          <article className="metric-card">
-            <span>Requests</span>
-            <strong>{formatTokenCount(animatedRequests)}</strong>
-          </article>
-          <article className="metric-card metric-card--status">
-            <span>Collector</span>
-            <strong>{snapshot?.collector.status ?? "starting"}</strong>
-            <small>{snapshot?.collector.endpoint ?? "http://127.0.0.1:14318"}</small>
+
+          <article className="side-board">
+            <div className="side-board__providers">
+              {displayedProviders.map((provider) => (
+                <article className="provider-pill" key={provider.id}>
+                  <div className="provider-pill__row">
+                    <strong>{provider.label}</strong>
+                    <span className={`provider-card__dot provider-card__dot--${provider.status}`} />
+                  </div>
+                  <div className="provider-pill__meta">
+                    <span>{formatTokenCount(provider.totalTokens)}</span>
+                    <span>{provider.lastModel ?? provider.providerName}</span>
+                  </div>
+                </article>
+              ))}
+            </div>
+
+            <div className="side-board__actions">
+              <button className="primary-button ghost-button--small" type="button" onClick={previewTokens}>
+                Preview tokens
+              </button>
+              {primaryConnectTarget ? (
+                <button
+                  className="ghost-button ghost-button--small"
+                  type="button"
+                  disabled={busyAction === primaryConnectTarget.id}
+                  onClick={() => connectEditor(primaryConnectTarget.id, primaryConnectTarget.label)}
+                >
+                  Connect {primaryConnectTarget.label}
+                </button>
+              ) : null}
+              <button className="ghost-button ghost-button--small" type="button" onClick={hideOverlay}>
+                Hide overlay
+              </button>
+            </div>
           </article>
         </section>
 
-        <section className="provider-grid">
-          {visibleProviders.map((provider) => (
-            <article className="provider-card" key={provider.id}>
-              <div className="provider-card__header">
-                <div>
-                  <p>{provider.label}</p>
-                  <span>{provider.lastModel ?? provider.providerName}</span>
-                </div>
-                <span className={`provider-card__dot provider-card__dot--${provider.status}`} />
-              </div>
+        {totalTokens === 0 ? (
+          <section className="zero-state">
+            <div>
+              <p className="eyebrow">Zero-state check</p>
+              <strong>No tokens have landed yet.</strong>
+              <p>
+                Use the preview pulse to verify the overlay, then connect VS Code to stream real
+                Copilot telemetry into the collector.
+              </p>
+            </div>
 
-              <div className="provider-card__value">{formatTokenCount(provider.totalTokens)}</div>
-              <div className="provider-card__meta">
-                <span>{provider.requests} req</span>
-                <span>
-                  {formatTokenCount(provider.inputTokens)}/{formatTokenCount(provider.outputTokens)}
-                </span>
-              </div>
-              <Sparkline points={provider.recentDeltas} />
-            </article>
-          ))}
-        </section>
+            <div className="zero-state__actions">
+              <button className="primary-button" type="button" onClick={previewTokens}>
+                Preview tokens now
+              </button>
+              {primaryConnectTarget ? (
+                <button
+                  className="ghost-button"
+                  type="button"
+                  disabled={busyAction === primaryConnectTarget.id}
+                  onClick={() => connectEditor(primaryConnectTarget.id, primaryConnectTarget.label)}
+                >
+                  Connect {primaryConnectTarget.label}
+                </button>
+              ) : null}
+            </div>
+          </section>
+        ) : null}
 
         <section className={`settings-drawer ${settingsOpen ? "settings-drawer--open" : ""}`}>
           <div className="settings-group">
@@ -568,6 +841,12 @@ function App() {
               >
                 {busyAction === "reset" ? "Resetting..." : "Reset counters"}
               </button>
+              <button className="ghost-button" type="button" onClick={hideOverlay}>
+                Hide overlay
+              </button>
+              <button className="ghost-button ghost-button--danger" type="button" onClick={quitOverlay}>
+                Quit app
+              </button>
             </div>
           </div>
 
@@ -614,11 +893,6 @@ function App() {
             </div>
           </div>
         </section>
-
-        <footer className="footer-row">
-          <span>Drag the header to reposition the overlay.</span>
-          <span>v{snapshot?.appVersion ?? "0.1.0"}</span>
-        </footer>
 
         {notice ? <div className="toast">{notice}</div> : null}
       </section>
