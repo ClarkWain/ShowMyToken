@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { currentMonitor, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
+import {
+  currentMonitor,
+  getCurrentWindow,
+  LogicalSize,
+  PhysicalPosition,
+} from "@tauri-apps/api/window";
 import {
   startTransition,
   useEffect,
@@ -12,9 +17,18 @@ import {
 import "./App.css";
 
 const SNAPSHOT_EVENT = "show-my-token://snapshot";
+const OPEN_SETTINGS_EVENT = "show-my-token://open-settings";
+const NOTICE_EVENT = "show-my-token://notice";
 const hasTauriRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const windowHandle = hasTauriRuntime ? getCurrentWindow() : null;
 const numberFormatter = new Intl.NumberFormat("en-US");
+const FLOAT_WINDOW_SIZE = { width: 348, height: 154 };
+const SETTINGS_WINDOW_SIZE = { width: 552, height: 452 };
+const PROVIDER_PRIORITY: Record<string, number> = {
+  copilot: 0,
+  claude: 1,
+  copilotcli: 2,
+};
 
 type AppSettings = {
   appearance: {
@@ -124,23 +138,22 @@ function formatTokenCount(value: number) {
   return numberFormatter.format(value);
 }
 
-function formatRelativeTime(unixMs: number | null) {
+function formatCompactRelativeTime(unixMs: number | null) {
   if (!unixMs) {
-    return "No activity yet";
+    return "waiting";
   }
 
   const deltaSeconds = Math.max(0, Math.round((Date.now() - unixMs) / 1000));
 
   if (deltaSeconds < 5) {
-    return "Updated just now";
+    return "now";
   }
 
   if (deltaSeconds < 60) {
-    return `Updated ${deltaSeconds}s ago`;
+    return `${deltaSeconds}s`;
   }
 
-  const minutes = Math.round(deltaSeconds / 60);
-  return `Updated ${minutes}m ago`;
+  return `${Math.round(deltaSeconds / 60)}m`;
 }
 
 function summarizeCollectorMessage(message: string | null | undefined) {
@@ -334,6 +347,16 @@ function App() {
     }
   });
 
+  const syncWindowSize = useEffectEvent(async (expanded: boolean, settings: AppSettings | null) => {
+    if (!windowHandle || !settings) {
+      return;
+    }
+
+    const target = expanded ? SETTINGS_WINDOW_SIZE : FLOAT_WINDOW_SIZE;
+    await windowHandle.setSize(new LogicalSize(target.width, target.height));
+    await applyWindowPreferences(settings);
+  });
+
   const hydrateSnapshot = useEffectEvent(
     (nextSnapshot: DashboardSnapshot, reason: "boot" | "event" | "save" | "reload") => {
       startTransition(() => {
@@ -374,11 +397,25 @@ function App() {
 
     let unlistenSnapshot: (() => void) | undefined;
     let unlistenMove: (() => void) | undefined;
+    let unlistenOpenSettings: (() => void) | undefined;
+    let unlistenNotice: (() => void) | undefined;
 
     void listen<DashboardSnapshot>(SNAPSHOT_EVENT, ({ payload }) => {
       hydrateSnapshot(payload, "event");
     }).then((dispose) => {
       unlistenSnapshot = dispose;
+    });
+
+    void listen(OPEN_SETTINGS_EVENT, () => {
+      setSettingsOpen(true);
+    }).then((dispose) => {
+      unlistenOpenSettings = dispose;
+    });
+
+    void listen<string>(NOTICE_EVENT, ({ payload }) => {
+      setNotice(payload);
+    }).then((dispose) => {
+      unlistenNotice = dispose;
     });
 
     void windowHandle
@@ -398,12 +435,22 @@ function App() {
     return () => {
       unlistenSnapshot?.();
       unlistenMove?.();
+      unlistenOpenSettings?.();
+      unlistenNotice?.();
 
       if (moveTimer.current !== null) {
         window.clearTimeout(moveTimer.current);
       }
     };
   }, [hydrateSnapshot, reloadSnapshot]);
+
+  useEffect(() => {
+    if (!hasTauriRuntime) {
+      return;
+    }
+
+    void syncWindowSize(settingsOpen, draft ?? snapshot?.settings ?? null);
+  }, [settingsOpen, syncWindowSize]);
 
   useEffect(() => {
     if (!notice) {
@@ -530,26 +577,62 @@ function App() {
     setIsDirty(true);
   }
 
-  const visibleProviders =
-    snapshot?.providers.filter(
+  const visibleProviders = [
+    ...(snapshot?.providers.filter(
       (provider) =>
         provider.totalTokens > 0 || ["copilot", "claude", "copilotcli"].includes(provider.id),
-    ) ?? [];
+    ) ?? []),
+  ].sort((left, right) => {
+    const totalDelta = right.totalTokens - left.totalTokens;
+
+    if (totalDelta !== 0) {
+      return totalDelta;
+    }
+
+    const leftIsActive = left.status === "live" || left.status === "preview";
+    const rightIsActive = right.status === "live" || right.status === "preview";
+
+    if (leftIsActive !== rightIsActive) {
+      return Number(rightIsActive) - Number(leftIsActive);
+    }
+
+    const priorityDelta =
+      (PROVIDER_PRIORITY[left.id] ?? Number.MAX_SAFE_INTEGER) -
+      (PROVIDER_PRIORITY[right.id] ?? Number.MAX_SAFE_INTEGER);
+
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+
+    return (right.lastUpdateUnixMs ?? 0) - (left.lastUpdateUnixMs ?? 0);
+  });
   const totalInput = visibleProviders.reduce((sum, provider) => sum + provider.inputTokens, 0);
   const totalOutput = visibleProviders.reduce((sum, provider) => sum + provider.outputTokens, 0);
   const totalTokens = totalInput + totalOutput;
-  const totalRequests = visibleProviders.reduce((sum, provider) => sum + provider.requests, 0);
-  const activeProviders = visibleProviders.filter((provider) => provider.totalTokens > 0);
-  const displayedProviders = (activeProviders.length > 0 ? activeProviders : visibleProviders).slice(0, 2);
-  const topProvider = visibleProviders[0];
+  const topProvider =
+    visibleProviders.find((provider) => provider.totalTokens > 0) ?? visibleProviders[0] ?? null;
   const primaryConnectTarget =
     snapshot?.editorTargets.find((target) => target.exists && !target.connected) ?? null;
   const collectorMessage = summarizeCollectorMessage(snapshot?.collector.message);
   const collectorEndpoint = formatCollectorEndpoint(snapshot?.collector.endpoint);
-  const animatedTotal = useAnimatedNumber(totalTokens);
+  const productLabel = topProvider?.label ?? "GitHub Copilot";
+  const productModel = topProvider?.lastModel ?? "Waiting for first model";
   const animatedInput = useAnimatedNumber(totalInput);
   const animatedOutput = useAnimatedNumber(totalOutput);
-  const animatedRequests = useAnimatedNumber(totalRequests);
+  const meterModeLabel =
+    snapshot?.collector.status === "preview"
+      ? "Preview"
+      : snapshot?.collector.connected
+        ? "Live"
+        : "Idle";
+  const meterFootnote =
+    totalTokens > 0
+      ? `${formatTokenCount(animatedInput)} in  ${formatTokenCount(animatedOutput)} out`
+      : primaryConnectTarget
+        ? `Tray: connect ${primaryConnectTarget.label}`
+        : "Tray: connect a source";
+  const meterTimestamp = totalTokens > 0 ? formatCompactRelativeTime(snapshot?.collector.lastEventUnixMs ?? null) : meterModeLabel.toLowerCase();
+  const animatedTotal = useAnimatedNumber(totalTokens);
   const panelStyle = {
     "--panel-opacity": String(draft?.appearance.opacity ?? 0.76),
     "--panel-scale": String(draft?.appearance.fontScale ?? 1),
@@ -559,155 +642,54 @@ function App() {
 
   return (
     <main
-      className={`shell ${!hasTauriRuntime ? "shell--browser-preview" : ""} ${draft?.appearance.compactMode ? "shell--compact" : ""} ${
-        settingsOpen ? "shell--expanded" : ""
-      }`}
+      className={`shell ${!hasTauriRuntime ? "shell--browser-preview" : ""} ${settingsOpen ? "shell--expanded" : ""}`}
       style={panelStyle}
     >
-      <section className="glass-panel">
-        <header className="topbar" data-tauri-drag-region>
-          <div className="brand-block" data-tauri-drag-region>
-            <span className="brand-pill">SHOWMYTOKEN</span>
-            <div>
-              <p className="eyebrow">Live Agent Overlay</p>
-              <h1>{totalTokens > 0 ? "Live token burn is on screen." : "Ready for the first token pulse."}</h1>
+      <section className={`meter-shell ${settingsOpen ? "meter-shell--expanded" : ""}`}>
+        <article
+          className="meter-card"
+          data-tauri-drag-region
+          onContextMenu={(event) => {
+            event.preventDefault();
+            setSettingsOpen((open) => !open);
+          }}
+          onDoubleClick={() => setSettingsOpen((open) => !open)}
+          title="Double-click or right-click to open settings"
+        >
+          <div className="meter-card__top" data-tauri-drag-region>
+            <div className="meter-card__brand" data-tauri-drag-region>
+              <span className={`meter-dot meter-dot--${snapshot?.collector.connected ? "live" : "idle"}`} />
+              <span className="meter-card__label">{productLabel}</span>
+            </div>
+            <span className="meter-card__mode">{meterModeLabel}</span>
+          </div>
+
+          <div className="meter-card__total-row" data-tauri-drag-region>
+            <strong>{formatTokenCount(animatedTotal)}</strong>
+            <div className="meter-card__unit-block">
+              <span>tokens</span>
+              <small>{productModel}</small>
             </div>
           </div>
 
-          <div className="topbar__actions">
-            <button
-              className="ghost-button ghost-button--small"
-              type="button"
-              onClick={() => setSettingsOpen((open) => !open)}
-            >
-              {settingsOpen ? "Hide settings" : "Settings"}
-            </button>
-          </div>
-        </header>
+          <p className="meter-card__message">{totalTokens > 0 ? collectorMessage : "Waiting for live Copilot usage."}</p>
 
-        <section className="hero hero--compact">
-          <div className="hero__copy">
-            <p className="eyebrow">Total agent tokens</p>
-            <div className="hero__value-row">
-              <strong>{formatTokenCount(animatedTotal)}</strong>
-              <span>{topProvider?.label ?? "GitHub Copilot"}</span>
-            </div>
-            <p className="status-line">{collectorMessage}</p>
-            <div className="hero__status-row">
-              <span className={`signal-pill signal-pill--${snapshot?.collector.connected ? "live" : "idle"}`}>
-                {snapshot?.collector.connected ? "Collector live" : "Waiting"}
-              </span>
-              <span className="signal-pill signal-pill--muted">
-                {formatRelativeTime(snapshot?.collector.lastEventUnixMs ?? null)}
-              </span>
-              <span className="signal-pill signal-pill--muted signal-pill--endpoint">
-                {collectorEndpoint}
-              </span>
-            </div>
+          <div className="meter-card__footer" data-tauri-drag-region>
+            <span>{meterFootnote}</span>
+            <span>{meterTimestamp}</span>
           </div>
 
-          <div className="hero__spark">
+          <div className="meter-card__spark" data-tauri-drag-region>
             <Sparkline points={topProvider?.recentDeltas ?? []} />
-            <div className="hero__spark-caption">
-              <span>{topProvider?.lastModel ?? "waiting for first model"}</span>
-              <span>{snapshot?.collector.status ?? "starting"}</span>
-            </div>
           </div>
-        </section>
-
-        <section className="dashboard-grid">
-          <article className="metric-board">
-            <div className="metric-board__grid">
-              <div className="metric-pill">
-                <span>Input</span>
-                <strong>{formatTokenCount(animatedInput)}</strong>
-              </div>
-              <div className="metric-pill">
-                <span>Output</span>
-                <strong>{formatTokenCount(animatedOutput)}</strong>
-              </div>
-              <div className="metric-pill">
-                <span>Requests</span>
-                <strong>{formatTokenCount(animatedRequests)}</strong>
-              </div>
-              <div className="metric-pill">
-                <span>Agents</span>
-                <strong>{activeProviders.length || 1}</strong>
-              </div>
-            </div>
-          </article>
-
-          <article className="side-board">
-            <div className="side-board__providers">
-              {displayedProviders.map((provider) => (
-                <article className="provider-pill" key={provider.id}>
-                  <div className="provider-pill__row">
-                    <strong>{provider.label}</strong>
-                    <span className={`provider-card__dot provider-card__dot--${provider.status}`} />
-                  </div>
-                  <div className="provider-pill__meta">
-                    <span>{formatTokenCount(provider.totalTokens)}</span>
-                    <span>{provider.lastModel ?? provider.providerName}</span>
-                  </div>
-                </article>
-              ))}
-            </div>
-
-            <div className="side-board__actions">
-              <button className="primary-button ghost-button--small" type="button" onClick={previewTokens}>
-                Preview tokens
-              </button>
-              {primaryConnectTarget ? (
-                <button
-                  className="ghost-button ghost-button--small"
-                  type="button"
-                  disabled={busyAction === primaryConnectTarget.id}
-                  onClick={() => connectEditor(primaryConnectTarget.id, primaryConnectTarget.label)}
-                >
-                  Connect {primaryConnectTarget.label}
-                </button>
-              ) : null}
-              <button className="ghost-button ghost-button--small" type="button" onClick={hideOverlay}>
-                Hide overlay
-              </button>
-            </div>
-          </article>
-        </section>
-
-        {totalTokens === 0 ? (
-          <section className="zero-state">
-            <div>
-              <p className="eyebrow">Zero-state check</p>
-              <strong>No tokens have landed yet.</strong>
-              <p>
-                Use the preview pulse to verify the overlay, then connect VS Code to stream real
-                Copilot telemetry into the collector.
-              </p>
-            </div>
-
-            <div className="zero-state__actions">
-              <button className="primary-button" type="button" onClick={previewTokens}>
-                Preview tokens now
-              </button>
-              {primaryConnectTarget ? (
-                <button
-                  className="ghost-button"
-                  type="button"
-                  disabled={busyAction === primaryConnectTarget.id}
-                  onClick={() => connectEditor(primaryConnectTarget.id, primaryConnectTarget.label)}
-                >
-                  Connect {primaryConnectTarget.label}
-                </button>
-              ) : null}
-            </div>
-          </section>
-        ) : null}
+        </article>
 
         <section className={`settings-drawer ${settingsOpen ? "settings-drawer--open" : ""}`}>
           <div className="settings-group">
             <div>
-              <p className="eyebrow">Display controls</p>
-              <h2>Overlay tuning</h2>
+              <p className="eyebrow">Appearance</p>
+              <h2>Meter tuning</h2>
+              <p className="helper-copy">Default view stays tiny. Use this panel only when you need to tune it.</p>
             </div>
 
             <label>
@@ -806,24 +788,6 @@ function App() {
               />
             </label>
 
-            <label className="toggle-row">
-              <span>Compact layout</span>
-              <input
-                type="checkbox"
-                checked={draft?.appearance.compactMode ?? false}
-                onChange={(event) =>
-                  draft &&
-                  updateDraft({
-                    ...draft,
-                    appearance: {
-                      ...draft.appearance,
-                      compactMode: event.currentTarget.checked,
-                    },
-                  })
-                }
-              />
-            </label>
-
             <div className="settings-actions">
               <button
                 className="primary-button"
@@ -841,23 +805,23 @@ function App() {
               >
                 {busyAction === "reset" ? "Resetting..." : "Reset counters"}
               </button>
-              <button className="ghost-button" type="button" onClick={hideOverlay}>
-                Hide overlay
+              <button className="ghost-button" type="button" onClick={previewTokens}>
+                Preview tokens
               </button>
-              <button className="ghost-button ghost-button--danger" type="button" onClick={quitOverlay}>
-                Quit app
+              <button className="ghost-button" type="button" onClick={() => setSettingsOpen(false)}>
+                Close settings
               </button>
             </div>
           </div>
 
           <div className="settings-group">
             <div>
-              <p className="eyebrow">Connect VS Code</p>
-              <h2>Live agent feed</h2>
+              <p className="eyebrow">Source</p>
+              <h2>Live token feed</h2>
               <p className="helper-copy">
-                ShowMyToken listens on OTLP HTTP and patches VS Code to stream Copilot telemetry to
-                the local collector with one click.
+                Connect VS Code once, then keep the meter small and out of your way.
               </p>
+              <p className="settings-note">Collector endpoint: {collectorEndpoint}</p>
             </div>
 
             <div className="editor-targets">
@@ -883,13 +847,13 @@ function App() {
               ))}
             </div>
 
-            <div className="supported-callout">
-              <p className="eyebrow">Support matrix</p>
-              <p>
-                Copilot is production-ready now. Claude and Copilot CLI appear automatically when
-                VS Code emits their OTel spans. External Cursor and standalone Codex feeds remain
-                experimental until they expose stable local token telemetry.
-              </p>
+            <div className="settings-actions">
+              <button className="ghost-button" type="button" onClick={hideOverlay}>
+                Hide meter
+              </button>
+              <button className="ghost-button ghost-button--danger" type="button" onClick={quitOverlay}>
+                Quit app
+              </button>
             </div>
           </div>
         </section>

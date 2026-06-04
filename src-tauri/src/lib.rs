@@ -20,11 +20,23 @@ use std::{
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, WindowEvent};
+use tauri::{
+    menu::MenuBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    AppHandle, Emitter, Manager, WindowEvent,
+};
 
 const COLLECTOR_SOCKET: &str = "127.0.0.1:14318";
 const COLLECTOR_ENDPOINT: &str = "http://127.0.0.1:14318";
 const SNAPSHOT_EVENT: &str = "show-my-token://snapshot";
+const OPEN_SETTINGS_EVENT: &str = "show-my-token://open-settings";
+const NOTICE_EVENT: &str = "show-my-token://notice";
+const TRAY_SHOW_METER_ID: &str = "tray-show-meter";
+const TRAY_OPEN_SETTINGS_ID: &str = "tray-open-settings";
+const TRAY_PREVIEW_ID: &str = "tray-preview";
+const TRAY_CONNECT_ID: &str = "tray-connect";
+const TRAY_HIDE_METER_ID: &str = "tray-hide-meter";
+const TRAY_QUIT_ID: &str = "tray-quit";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -301,6 +313,120 @@ fn reset_counters(shared: tauri::State<'_, SharedState>) -> Result<DashboardSnap
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
+}
+
+fn show_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+fn hide_main_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.minimize();
+    }
+}
+
+fn emit_notice(app: &AppHandle, message: impl Into<String>) {
+    let _ = app.emit(NOTICE_EVENT, message.into());
+}
+
+fn open_settings_panel(app: &AppHandle) {
+    show_main_window(app);
+    let _ = app.emit(OPEN_SETTINGS_EVENT, true);
+}
+
+fn connect_primary_editor_target() -> Result<String, String> {
+    let target = editor_targets()
+        .into_iter()
+        .find(|candidate| candidate.exists && !candidate.connected)
+        .or_else(|| editor_targets().into_iter().find(|candidate| candidate.exists))
+        .ok_or_else(|| "No supported VS Code installation was found.".to_string())?;
+
+    patch_editor_settings(Path::new(&target.settings_path))?;
+    Ok(target.label)
+}
+
+fn build_tray(app: &AppHandle, shared: SharedState) -> tauri::Result<()> {
+    let menu = MenuBuilder::new(app)
+        .text(TRAY_SHOW_METER_ID, "Show meter")
+        .text(TRAY_OPEN_SETTINGS_ID, "Open settings")
+        .text(TRAY_PREVIEW_ID, "Preview tokens")
+        .text(TRAY_CONNECT_ID, "Connect VS Code")
+        .separator()
+        .text(TRAY_HIDE_METER_ID, "Hide meter")
+        .text(TRAY_QUIT_ID, "Quit ShowMyToken")
+        .build()?;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .expect("default window icon should exist for tray");
+    let shared_for_menu = shared.clone();
+
+    TrayIconBuilder::with_id("show-my-token-tray")
+        .icon(icon)
+        .tooltip("ShowMyToken")
+        .show_menu_on_left_click(false)
+        .menu(&menu)
+        .on_tray_icon_event(|tray, event| {
+            let left_click = matches!(
+                event,
+                TrayIconEvent::Click {
+                    button: MouseButton::Left,
+                    button_state: MouseButtonState::Up,
+                    ..
+                }
+            );
+            let left_double_click = matches!(
+                event,
+                TrayIconEvent::DoubleClick {
+                    button: MouseButton::Left,
+                    ..
+                }
+            );
+
+            if left_double_click {
+                open_settings_panel(tray.app_handle());
+            } else if left_click {
+                show_main_window(tray.app_handle());
+            }
+        })
+        .on_menu_event(move |app, event| match event.id().as_ref() {
+            TRAY_SHOW_METER_ID => {
+                show_main_window(app);
+            }
+            TRAY_OPEN_SETTINGS_ID => {
+                open_settings_panel(app);
+            }
+            TRAY_PREVIEW_ID => {
+                inject_demo_snapshot(&shared_for_menu, Some(app));
+                show_main_window(app);
+                emit_notice(app, "Preview tokens injected.");
+            }
+            TRAY_CONNECT_ID => match connect_primary_editor_target() {
+                Ok(label) => {
+                    show_main_window(app);
+                    let _ = app.emit(SNAPSHOT_EVENT, shared_for_menu.snapshot());
+                    emit_notice(app, format!("{label} is now patched for live Copilot telemetry."));
+                }
+                Err(error) => {
+                    open_settings_panel(app);
+                    emit_notice(app, error);
+                }
+            },
+            TRAY_HIDE_METER_ID => {
+                hide_main_window(app);
+            }
+            TRAY_QUIT_ID => {
+                quit_app(app.clone());
+            }
+            _ => {}
+        })
+        .build(app)?;
+
+    Ok(())
 }
 
 fn provider_seeds() -> HashMap<String, ProviderSnapshot> {
@@ -858,6 +984,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .setup(move |app| {
             start_collector(app.handle().clone(), setup_state.clone());
+            build_tray(&app.handle(), setup_state.clone())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
