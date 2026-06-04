@@ -6,6 +6,13 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
+  -moz-text-size-adjust: 100%;
+}
+
+@supports (text-size-adjust: 100%) {
+  :root {
+    text-size-adjust: 100%;
+  }
 }
 
 html,
@@ -47,9 +54,9 @@ input {
 
 .meter-shell {
   position: relative;
-  width: min(100%, 348px);
+  width: min(100%, 280px);
   display: grid;
-  gap: 10px;
+  gap: 12px;
 }
 
 .meter-shell--expanded {
@@ -57,41 +64,10 @@ input {
 }
 
 .meter-card {
-  position: relative;
-  overflow: hidden;
-  padding: 14px 14px 12px;
-  border-radius: 28px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background:
-    radial-gradient(circle at 16% 14%, rgba(255, 138, 61, 0.24), transparent 30%),
-    radial-gradient(circle at 86% 18%, rgba(91, 201, 255, 0.18), transparent 30%),
-    linear-gradient(160deg, rgba(11, 16, 24, var(--panel-opacity, 0.76)), rgba(17, 24, 35, 0.96));
-  box-shadow:
-    0 20px 48px rgba(5, 9, 14, 0.48),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(22px) saturate(138%);
+  background: transparent;
 }
 
-.meter-card::before {
-  content: "";
-  position: absolute;
-  inset: auto -18% -34% 28%;
-  height: 130px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, rgba(255, 138, 61, 0), rgba(255, 138, 61, 0.18), rgba(91, 201, 255, 0.08));
-  filter: blur(18px);
-  pointer-events: none;
-}
-
-.meter-card > * {
-  position: relative;
-  z-index: 1;
-}
-
-.meter-card__top,
-.meter-card__brand,
-.meter-card__total-row,
-.meter-card__footer,
+.meter-inline,
 .provider-pill__row,
 .provider-pill__meta,
 .editor-card,
@@ -102,31 +78,6 @@ input {
   gap: 10px;
 }
 
-.meter-card__brand {
-  justify-content: flex-start;
-  min-width: 0;
-}
-
-.meter-dot {
-  inline-size: 9px;
-  block-size: 9px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.28);
-  box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.12);
-}
-
-.meter-dot--live {
-  background: #7af5a5;
-  box-shadow: 0 0 0 7px rgba(122, 245, 165, 0.12);
-}
-
-.meter-dot--idle {
-  background: #8892a3;
-}
-
-.meter-card__label,
-.meter-card__mode,
-.meter-card__unit-block span,
 .eyebrow {
   text-transform: uppercase;
   letter-spacing: 0.18em;
@@ -134,43 +85,6 @@ input {
   font-weight: 700;
 }
 
-.meter-card__label {
-  color: rgba(248, 251, 255, 0.78);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.meter-card__mode {
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  color: rgba(248, 251, 255, 0.68);
-}
-
-.meter-card__total-row {
-  align-items: flex-end;
-  margin-top: 10px;
-}
-
-.meter-card__total-row strong {
-  font-size: clamp(56px, 12vw, 84px);
-  line-height: 0.88;
-  letter-spacing: -0.08em;
-}
-
-.meter-card__unit-block {
-  display: grid;
-  gap: 4px;
-  justify-items: end;
-  text-align: right;
-}
-
-.meter-card__unit-block span {
-  color: rgba(248, 251, 255, 0.56);
-}
-
-.meter-card__unit-block small,
 .settings-note,
 .provider-pill__meta,
 .editor-card span,
@@ -180,30 +94,51 @@ input {
   color: rgba(248, 251, 255, 0.62);
 }
 
-.meter-card__message {
-  margin: 8px 0 0;
-  font-size: 13px;
-  color: rgba(248, 251, 255, 0.82);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.meter-inline {
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.meter-card__footer {
+.meter-number {
+  margin: 0;
+  font-size: clamp(74px, 18vw, 92px);
+  line-height: 0.86;
+  letter-spacing: -0.08em;
+  color: rgba(248, 251, 255, 0.98);
+  text-shadow: 0 6px 22px rgba(4, 7, 12, 0.22);
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.meter-card--idle .meter-number {
+  color: rgba(248, 251, 255, 0.46);
+  text-shadow: 0 4px 14px rgba(4, 7, 12, 0.12);
+}
+
+.meter-card--preview .meter-number {
+  color: rgba(255, 178, 92, 0.98);
+  text-shadow: 0 0 16px rgba(255, 138, 61, 0.24);
+}
+
+.meter-menu-button {
+  inline-size: 28px;
+  block-size: 28px;
   margin-top: 10px;
-  font-size: 12px;
-  color: rgba(248, 251, 255, 0.64);
+  border: 0;
+  border-radius: 999px;
+  background: rgba(8, 12, 18, 0.18);
+  color: rgba(248, 251, 255, 0.55);
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  transition: background 180ms ease, color 180ms ease, transform 180ms ease;
 }
 
-.meter-card__footer span:last-child {
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-}
-
-.meter-card__spark {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
+.meter-menu-button:hover {
+  background: rgba(8, 12, 18, 0.34);
+  color: rgba(248, 251, 255, 0.9);
+  transform: translateY(-1px);
 }
 
 .sparkline {
@@ -249,6 +184,7 @@ input {
   border-radius: 22px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.05);
+  -webkit-backdrop-filter: blur(18px) saturate(130%);
   backdrop-filter: blur(18px) saturate(130%);
 }
 
@@ -403,17 +339,10 @@ input {
     grid-template-columns: 1fr;
   }
 
-  .meter-card__total-row,
-  .meter-card__footer,
   .editor-card,
   .provider-pill__row,
   .provider-pill__meta {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .meter-card__unit-block {
-    justify-items: start;
-    text-align: left;
   }
 }

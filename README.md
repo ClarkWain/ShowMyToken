@@ -1,16 +1,17 @@
 # ShowMyToken
 
-ShowMyToken is a cross-platform desktop overlay that keeps live AI agent token usage on the desktop instead of buried inside a dashboard or log panel.
+ShowMyToken is a cross-platform desktop token meter that keeps a live token count on the desktop instead of burying it inside a dashboard, log panel, or settings-heavy widget.
 
 ## What Ships Now
 
-- Transparent always-on-top Tauri overlay with drag-to-reposition support
-- Live OTLP collector on `http://127.0.0.1:14318/v1/traces`
+- Transparent always-on-top floating meter that defaults to just one live number
+- Drag-to-reposition support with remembered window placement
+- System tray entry for show, hide, settings, preview, connect, and quit
+- Embedded OTLP collector inside the app process; users do not launch a separate local service
 - Real-time GitHub Copilot token aggregation from VS Code agent telemetry
 - Automatic detection for VS Code and VS Code Insiders settings files
 - One-click VS Code connection flow that enables Copilot OTel streaming to the local collector
-- Animated token transitions, compact mode, color controls, font scaling, hide and quit actions
-- Multi-agent UI surface for Copilot, Claude, Copilot CLI, and any other agent name that arrives through VS Code OTel
+- Optional settings surface for opacity, color, font scale, preview, and connection state
 
 ## Product Positioning
 
@@ -19,6 +20,12 @@ The first production-ready connector is GitHub Copilot inside VS Code, because V
 Claude and Copilot CLI automatically appear when VS Code emits their spans through the same pipeline.
 
 Cursor and standalone Codex remain experimental for now because they do not expose a stable, officially documented local token telemetry feed that can be consumed safely without reverse engineering.
+
+## User Experience Contract
+
+- The default desktop surface should stay minimal: one number and at most one visible control.
+- Setup, connection, preview, hide, and quit belong in the tray or the secondary settings surface, not in the main meter.
+- End users install one app. Node.js and Rust are build-time dependencies for development only, not runtime prerequisites for using the shipped product.
 
 ## Local Development
 
@@ -49,10 +56,10 @@ npm run validate
 ## Connect VS Code To ShowMyToken
 
 1. Launch ShowMyToken.
-2. Open the settings drawer in the overlay.
+2. Open the tray menu or the single meter button.
 3. Click `Connect` for `VS Code` or `VS Code Insiders`.
 4. Ask Copilot to do work in VS Code.
-5. Watch the overlay update when VS Code emits `invoke_agent` spans.
+5. Watch the floating meter update when VS Code emits `invoke_agent` spans.
 
 ShowMyToken listens locally on OTLP HTTP at `http://127.0.0.1:14318` and does not require prompt-content capture to display token usage.
 

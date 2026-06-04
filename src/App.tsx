@@ -12,7 +12,6 @@ import {
   useEffectEvent,
   useRef,
   useState,
-  type CSSProperties,
 } from "react";
 import "./App.css";
 
@@ -22,7 +21,7 @@ const NOTICE_EVENT = "show-my-token://notice";
 const hasTauriRuntime = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 const windowHandle = hasTauriRuntime ? getCurrentWindow() : null;
 const numberFormatter = new Intl.NumberFormat("en-US");
-const FLOAT_WINDOW_SIZE = { width: 348, height: 154 };
+const FLOAT_WINDOW_SIZE = { width: 280, height: 108 };
 const SETTINGS_WINDOW_SIZE = { width: 552, height: 452 };
 const PROVIDER_PRIORITY: Record<string, number> = {
   copilot: 0,
@@ -156,22 +155,6 @@ function formatCompactRelativeTime(unixMs: number | null) {
   return `${Math.round(deltaSeconds / 60)}m`;
 }
 
-function summarizeCollectorMessage(message: string | null | undefined) {
-  if (!message) {
-    return "Booting collector...";
-  }
-
-  if (message.includes("Preview pulse injected locally")) {
-    return "Preview traffic is visible.";
-  }
-
-  if (message.includes("Ready to capture") || message.includes("Waiting")) {
-    return "Waiting for live agent traffic.";
-  }
-
-  return message;
-}
-
 function formatCollectorEndpoint(endpoint: string | null | undefined) {
   if (!endpoint) {
     return "127.0.0.1:14318";
@@ -183,28 +166,6 @@ function formatCollectorEndpoint(endpoint: string | null | undefined) {
   } catch {
     return endpoint.replace(/^https?:\/\//, "");
   }
-}
-
-function buildSparklinePath(points: number[]) {
-  const series = points.length > 0 ? points.slice(-16) : [0, 0, 0];
-  const max = Math.max(...series, 1);
-
-  return series
-    .map((point, index) => {
-      const x = series.length === 1 ? 100 : (index / (series.length - 1)) * 100;
-      const y = 34 - (point / max) * 24;
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(" ");
-}
-
-function Sparkline({ points }: { points: number[] }) {
-  return (
-    <svg className="sparkline" viewBox="0 0 100 36" preserveAspectRatio="none">
-      <path className="sparkline__glow" d={buildSparklinePath(points)} />
-      <path className="sparkline__line" d={buildSparklinePath(points)} />
-    </svg>
-  );
 }
 
 function createPreviewSnapshot(): DashboardSnapshot {
@@ -613,74 +574,58 @@ function App() {
     visibleProviders.find((provider) => provider.totalTokens > 0) ?? visibleProviders[0] ?? null;
   const primaryConnectTarget =
     snapshot?.editorTargets.find((target) => target.exists && !target.connected) ?? null;
-  const collectorMessage = summarizeCollectorMessage(snapshot?.collector.message);
   const collectorEndpoint = formatCollectorEndpoint(snapshot?.collector.endpoint);
   const productLabel = topProvider?.label ?? "GitHub Copilot";
-  const productModel = topProvider?.lastModel ?? "Waiting for first model";
-  const animatedInput = useAnimatedNumber(totalInput);
-  const animatedOutput = useAnimatedNumber(totalOutput);
-  const meterModeLabel =
+  const meterVisualState =
     snapshot?.collector.status === "preview"
-      ? "Preview"
+      ? "preview"
       : snapshot?.collector.connected
-        ? "Live"
-        : "Idle";
-  const meterFootnote =
+        ? "live"
+        : "idle";
+  const meterHint =
     totalTokens > 0
-      ? `${formatTokenCount(animatedInput)} in  ${formatTokenCount(animatedOutput)} out`
+      ? `${productLabel} · ${meterVisualState} · ${formatCompactRelativeTime(snapshot?.collector.lastEventUnixMs ?? null)}`
       : primaryConnectTarget
-        ? `Tray: connect ${primaryConnectTarget.label}`
-        : "Tray: connect a source";
-  const meterTimestamp = totalTokens > 0 ? formatCompactRelativeTime(snapshot?.collector.lastEventUnixMs ?? null) : meterModeLabel.toLowerCase();
+        ? `Connect ${primaryConnectTarget.label} from tray`
+        : "Use the tray to connect VS Code";
   const animatedTotal = useAnimatedNumber(totalTokens);
-  const panelStyle = {
-    "--panel-opacity": String(draft?.appearance.opacity ?? 0.76),
-    "--panel-scale": String(draft?.appearance.fontScale ?? 1),
-    "--panel-text": draft?.appearance.textColor ?? "#F8FBFF",
-    "--panel-accent": draft?.appearance.accentColor ?? "#FF8A3D",
-  } as CSSProperties;
+
+  useEffect(() => {
+    const root = document.documentElement;
+
+    root.style.setProperty("--panel-opacity", String(draft?.appearance.opacity ?? 0.76));
+    root.style.setProperty("--panel-scale", String(draft?.appearance.fontScale ?? 1));
+    root.style.setProperty("--panel-text", draft?.appearance.textColor ?? "#F8FBFF");
+    root.style.setProperty("--panel-accent", draft?.appearance.accentColor ?? "#FF8A3D");
+  }, [
+    draft?.appearance.accentColor,
+    draft?.appearance.fontScale,
+    draft?.appearance.opacity,
+    draft?.appearance.textColor,
+  ]);
 
   return (
-    <main
-      className={`shell ${!hasTauriRuntime ? "shell--browser-preview" : ""} ${settingsOpen ? "shell--expanded" : ""}`}
-      style={panelStyle}
-    >
+    <main className={`shell ${!hasTauriRuntime ? "shell--browser-preview" : ""} ${settingsOpen ? "shell--expanded" : ""}`}>
       <section className={`meter-shell ${settingsOpen ? "meter-shell--expanded" : ""}`}>
         <article
-          className="meter-card"
-          data-tauri-drag-region
+          className={`meter-card meter-card--${meterVisualState}`}
           onContextMenu={(event) => {
             event.preventDefault();
             setSettingsOpen((open) => !open);
           }}
           onDoubleClick={() => setSettingsOpen((open) => !open)}
-          title="Double-click or right-click to open settings"
+          title={`${meterHint}. Right-click or use the button for settings.`}
         >
-          <div className="meter-card__top" data-tauri-drag-region>
-            <div className="meter-card__brand" data-tauri-drag-region>
-              <span className={`meter-dot meter-dot--${snapshot?.collector.connected ? "live" : "idle"}`} />
-              <span className="meter-card__label">{productLabel}</span>
-            </div>
-            <span className="meter-card__mode">{meterModeLabel}</span>
-          </div>
-
-          <div className="meter-card__total-row" data-tauri-drag-region>
-            <strong>{formatTokenCount(animatedTotal)}</strong>
-            <div className="meter-card__unit-block">
-              <span>tokens</span>
-              <small>{productModel}</small>
-            </div>
-          </div>
-
-          <p className="meter-card__message">{totalTokens > 0 ? collectorMessage : "Waiting for live Copilot usage."}</p>
-
-          <div className="meter-card__footer" data-tauri-drag-region>
-            <span>{meterFootnote}</span>
-            <span>{meterTimestamp}</span>
-          </div>
-
-          <div className="meter-card__spark" data-tauri-drag-region>
-            <Sparkline points={topProvider?.recentDeltas ?? []} />
+          <div className="meter-inline" data-tauri-drag-region>
+            <strong className="meter-number">{formatTokenCount(animatedTotal)}</strong>
+            <button
+              className="meter-menu-button"
+              type="button"
+              aria-label={settingsOpen ? "Hide settings" : `Show settings for ${productLabel}`}
+              onClick={() => setSettingsOpen((open) => !open)}
+            >
+              ...
+            </button>
           </div>
         </article>
 
